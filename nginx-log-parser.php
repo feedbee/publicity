@@ -3,7 +3,7 @@
 /*
 log_format  main  '$remote_addr - [$time_local] "$host" "$request" '
 				  '$status ($bytes_sent) "$http_referer" '
-				  '"$uri $args" [$request_time] "$http_user_agent"';
+				  '"$uri $args" [$request_time] "$http_user_agent" "$upstream_response_time"';
 */
 
 class NginxLogParser
@@ -90,7 +90,7 @@ class NginxLogParser
 	static private function parseRow($row)
 	{
 		$matches = null;
-		$found = preg_match('#^(.*) - \[(.*)\] "(.*)" "(.{1,8}) (.*)" (\d{3}) \((\d+)\) "(.*)" "(.*) (.*)" \[(\d+\.\d+)\] "(.*)"$#isU', trim($row), $matches);
+		$found = preg_match('#^(.*) - \[(.*)\] "(.*)" "(.{1,8}) (.*)" (\d{3}) \((\d+)\) "(.*)" "(.*) (.*)" \[(\d+\.\d+)\] "(.*)" "([\d\.]*|-)"$#isU', trim($row), $matches);
 		
 		if ($found > 0)
 		{
@@ -107,6 +107,7 @@ class NginxLogParser
 				'referer' => $matches[8],
 				'responseCode' => $matches[6],
 				'responseSize' => $matches[7],
+				'upstreamResponseTime' => $matches[8],
 			);
 			
 			return $result;
