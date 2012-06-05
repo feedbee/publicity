@@ -2,8 +2,8 @@
 
 /*
 log_format  main  '$remote_addr - [$time_local] "$host" "$request" '
-				  '$status ($bytes_sent) "$http_referer" '
-				  '"$uri $args" [$request_time] "$http_user_agent" "$upstream_response_time"';
+				  '$status ($bytes_sent) "$http_referer" "$uri $args" '
+				  '[$request_time] "$http_user_agent" "$upstream_response_time"';
 */
 
 class NginxLogParser
@@ -90,10 +90,15 @@ class NginxLogParser
 	static private function parseRow($row)
 	{
 		$matches = null;
-		$found = preg_match('#^(.*) - \[(.*)\] "(.*)" "(.{1,8}) (.*)" (\d{3}) \((\d+)\) "(.*)" "(.*) (.*)" \[(\d+\.\d+)\] "(.*)" "([\d\.]*|-)"$#isU', trim($row), $matches);
+		$found = preg_match('#^(.*) - \[(.*)\] "(.*)" "(.{1,8}) (.*)" (\d{3}) \((\d+)\) "(.*)" "(.*) (.*)" \[(\d+\.\d+)\] "(.*)" "([\d\.: ]+|\-)"$#isU', trim($row), $matches);
 		
 		if ($found > 0)
 		{
+			$upstreamTime = 0;
+			if ($matches[13] != '-')
+			{
+				$upstreamTime = array_sum(explode(' : ', $matches[13]));
+			}
 			$result = array(
 				'time' => $matches[2],
 				'remoteAddress' => $matches[1],
@@ -107,7 +112,7 @@ class NginxLogParser
 				'referer' => $matches[8],
 				'responseCode' => $matches[6],
 				'responseSize' => $matches[7],
-				'upstreamResponseTime' => $matches[8],
+				'upstreamResponseTime' => $upstreamTime,
 			);
 			
 			return $result;
@@ -128,6 +133,10 @@ class NginxLogParser
 			$value['timeMin'] = min($value['time']);
 			$value['timeMax'] = max($value['time']);
 			$value['timeAvg'] = self::average($value['time']);
+			
+			$value['upstreamTimeMin'] = min($value['upstreamTime']);
+			$value['upstreamTimeMax'] = max($value['upstreamTime']);
+			$value['upstreamTimeAvg'] = self::average($value['upstreamTime']);
 		}
 		
 		$this->_summary['timeMin'] = min($this->_time);
@@ -152,7 +161,7 @@ class NginxLogParser
 		// Request URI
 		$uri = $rowArray['requestUri'];
 		$rowArray['requestQueryString'] != '-' && $uri .= "?{$rowArray['requestQueryString']}";
-		$this->incrementSummaryUriCounter('uri', $uri, $rowArray['requestTime']);
+		$this->incrementSummaryUriCounter('uri', $uri, $rowArray['requestTime'], $rowArray['upstreamResponseTime']);
 		
 		// Request time
 		$this->_time[] = $rowArray['requestTime'];
@@ -185,16 +194,17 @@ class NginxLogParser
 		}
 	}
 	
-	private function incrementSummaryUriCounter($key, $value, $time)
+	private function incrementSummaryUriCounter($key, $value, $time, $upstreamTime)
 	{
 		if (!isset($this->_summary[$key][$value]))
 		{
-			$this->_summary[$key][$value] = array('cnt' => 1, 'time' => array($time));
+			$this->_summary[$key][$value] = array('cnt' => 1, 'time' => array($time), 'upstreamTime' => array($upstreamTime));
 		}
 		else
 		{
 			$this->_summary[$key][$value]['cnt']++;
 			$this->_summary[$key][$value]['time'][] = $time;
+			$this->_summary[$key][$value]['upstreamTime'][] = $upstreamTime;
 		}
 	}
 	
@@ -212,7 +222,7 @@ $summary = NginxLogParser::parse('php://stdin');
 <p><b><?php echo $summary['rows']; ?> lines processed.</b><?php if ($summary['rowsFailed']) { ?> Failed rows: <?php echo $summary['rowsFailed']; ?>.
 	<?php } ?> Interval <?php echo $seconds = $summary['timeTo'] - $summary['timeFrom']; ?> seconds.
 	From <?php echo date('Y-m-d H:i:s', $summary['timeFrom']); ?> to <?php echo date('Y-m-d H:i:s', $summary['timeTo']); ?>.</p>
-<p>Average stream: <?php echo sprintf('%.3f', $summary['rows'] / $seconds); ?> rps.</p>
+<p>Average stream: <?php echo $seconds > 0 ? sprintf('%.3f', $summary['rows'] / $seconds) : $summary['rows']; ?> rps.</p>
 
 <h2>Request processing time stat</h2>
 <table border="1" cellspacing="0" cellpadding="3">
@@ -244,10 +254,14 @@ $summary = NginxLogParser::parse('php://stdin');
 
 <h2>URI stat (<?php echo count($summary['uri']); ?>)</h2>
 <table border="1" cellspacing="0" cellpadding="3">
-<tr><th rowspan="2">#</th><th rowspan="2">URI</th><th rowspan="2">Cnt</th><th colspan="3">Time</th></tr>
-<tr><th>Min</th><th>Avg</th><th>Max</th></tr>
+<tr><th rowspan="2">#</th><th rowspan="2">URI</th><th rowspan="2">Cnt</th><th colspan="3">Time</th><th colspan="3">Upstream Time</th></tr>
+<tr><th>Min</th><th>Avg</th><th>Max</th><th>Min</th><th>Avg</th><th>Max</th></tr>
 <?php $i = 0; foreach ($summary['uri'] as $uri => $value) { $i++; ?>
-	<tr><td><?php echo $i; ?></td><td><?php echo htmlspecialchars(wordwrap($uri, 100, ' ', true)); ?></td><td><?php echo $value['cnt'] ?></td><td><?php echo $value['timeMin'] ?></td><td<?php if ($value['timeAvg'] > 1.0) { ?> style="background-color:red;"<?php }?>><?php echo sprintf('%.3f', $value['timeAvg']) ?></td><td<?php if ($value['timeMax'] > 1.0) { ?> style="background-color:pink;"<?php }?>><?php echo $value['timeMax'] ?></td></tr>
+	<tr>
+		<td><?php echo $i; ?></td><td><?php echo htmlspecialchars(wordwrap($uri, 100, ' ', true)); ?></td><td><?php echo $value['cnt'] ?></td>
+		<td><?php echo $value['timeMin'] ?></td><td<?php if ($value['timeAvg'] > 1.0) { ?> style="background-color:red;"<?php }?>><?php echo sprintf('%.3f', $value['timeAvg']) ?></td><td<?php if ($value['timeMax'] > 1.0) { ?> style="background-color:pink;"<?php }?>><?php echo $value['timeMax'] ?></td>
+		<td><?php echo $value['upstreamTimeMin'] ?></td><td<?php if ($value['upstreamTimeAvg'] > 1.0) { ?> style="background-color:red;"<?php }?>><?php echo sprintf('%.3f', $value['upstreamTimeAvg']) ?></td><td<?php if ($value['upstreamTimeMax'] > 1.0) { ?> style="background-color:pink;"<?php }?>><?php echo $value['upstreamTimeMax'] ?></td>
+	</tr>
 <?php } ?>
 </table>
 
